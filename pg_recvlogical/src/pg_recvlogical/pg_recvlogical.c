@@ -9,7 +9,7 @@
  *		  src/bin/pg_basebackup/pg_recvlogical.c
  *-------------------------------------------------------------------------
  */
-
+#include "pg_recvlogical/pg_recvlogical.h"
 #include "postgres_fe.h"
 
 #include <dirent.h>
@@ -196,11 +196,39 @@ OutputFsync(TimestampTz now)
 	return true;
 }
 
+void pg_recvlogical_stream_logical_start(const void* context, pg_recvlogical_on_changes_callback_f on_changes)
+{
+	/* Stream loop */
+	while (true)
+	{
+		log_streaming(context, on_changes);
+
+		if (time_to_abort)
+		{
+			/*
+			 * We've been Ctrl-C'ed or reached an exit limit condition. That's
+			 * not an error, so exit without an errorcode.
+			 */
+			return;
+		}
+		else if (noloop)
+		{
+			pg_log_error("disconnected");
+			return;
+		}
+		else
+		{
+			/* translator: check source for value for %d */
+			pg_log_info("disconnected; waiting %d seconds to try again",
+						RECONNECT_SLEEP_TIME);
+			pg_usleep(RECONNECT_SLEEP_TIME * 1000000);
+		}
+	}
+}
 /*
  * Start the log streaming
  */
-static void
-StreamLogicalLog(void)
+void log_streaming(const void* context, pg_recvlogical_on_changes_callback_f on_changes)
 {
 	PGresult   *res;
 	char	   *copybuf = NULL;
@@ -318,28 +346,6 @@ StreamLogicalLog(void)
 			outfd = -1;
 		}
 		output_reopen = false;
-
-		/* open the output file, if not open yet */
-		if (outfd == -1)
-		{
-			struct stat statbuf;
-
-			if (strcmp(outfile, "-") == 0)
-				outfd = fileno(stdout);
-			else
-				outfd = open(outfile, O_CREAT | O_APPEND | O_WRONLY | PG_BINARY,
-							 S_IRUSR | S_IWUSR);
-			if (outfd == -1)
-			{
-				pg_log_error("could not open log file \"%s\": %m", outfile);
-				goto error;
-			}
-
-			if (fstat(outfd, &statbuf) != 0)
-				pg_log_error("could not stat file \"%s\": %m", outfile);
-
-			output_isfile = S_ISREG(statbuf.st_mode) && !isatty(outfd);
-		}
 
 		r = PQgetCopyData(conn, &copybuf, 1);
 		if (r == 0)
@@ -538,32 +544,7 @@ StreamLogicalLog(void)
 		/* signal that a fsync is needed */
 		output_needs_fsync = true;
 
-		while (bytes_left)
-		{
-			int			ret;
-
-			ret = write(outfd,
-						copybuf + hdr_len + bytes_written,
-						bytes_left);
-
-			if (ret < 0)
-			{
-				pg_log_error("could not write %u bytes to log file \"%s\": %m",
-							 bytes_left, outfile);
-				goto error;
-			}
-
-			/* Write was successful, advance our position */
-			bytes_written += ret;
-			bytes_left -= ret;
-		}
-
-		if (write(outfd, "\n", 1) != 1)
-		{
-			pg_log_error("could not write %u bytes to log file \"%s\": %m",
-						 1, outfile);
-			goto error;
-		}
+		on_changes(context, copybuf + hdr_len, bytes_left);
 
 		if (endpos != InvalidXLogRecPtr && cur_record_lsn == endpos)
 		{
@@ -593,18 +574,6 @@ StreamLogicalLog(void)
 		goto error;
 	}
 	PQclear(res);
-
-	if (outfd != -1 && strcmp(outfile, "-") != 0)
-	{
-		TimestampTz t = feGetCurrentTimestamp();
-
-		/* no need to jump to error on failure here, we're finishing anyway */
-		OutputFsync(t);
-
-		if (close(outfd) != 0)
-			pg_log_error("could not close file \"%s\": %m", outfile);
-	}
-	outfd = -1;
 error:
 	if (copybuf != NULL)
 	{
@@ -643,7 +612,7 @@ sighup_handler(int signum)
 
 
 int
-main(int argc, char **argv)
+pg_recvlogical_init(int argc, char **argv)
 {
 	static struct option long_options[] = {
 /* general options */
@@ -956,32 +925,6 @@ main(int argc, char **argv)
 
 	if (!do_start_slot)
 		exit(0);
-
-	/* Stream loop */
-	while (true)
-	{
-		StreamLogicalLog();
-		if (time_to_abort)
-		{
-			/*
-			 * We've been Ctrl-C'ed or reached an exit limit condition. That's
-			 * not an error, so exit without an errorcode.
-			 */
-			exit(0);
-		}
-		else if (noloop)
-		{
-			pg_log_error("disconnected");
-			exit(1);
-		}
-		else
-		{
-			/* translator: check source for value for %d */
-			pg_log_info("disconnected; waiting %d seconds to try again",
-						RECONNECT_SLEEP_TIME);
-			pg_usleep(RECONNECT_SLEEP_TIME * 1000000);
-		}
-	}
 }
 
 /*

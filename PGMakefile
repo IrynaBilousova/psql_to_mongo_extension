@@ -1,0 +1,8 @@
+PG_CONFIG = pg_config
+PGXS := $(shell $(PG_CONFIG) --pgxs)
+MODULE_big = pg_recvlogical
+OBJS = pg_recvlogical.o
+JANSSON_VERSION = 2.7
+REGRESS = default
+
+include $(PGXS)
