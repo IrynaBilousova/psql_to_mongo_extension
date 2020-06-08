@@ -11,7 +11,7 @@
  */
 #include "pg_recvlogical/pg_recvlogical.h"
 #include "postgres_fe.h"
-
+#include "postgres.h"
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -27,23 +27,25 @@
 #include "libpq-fe.h"
 #include "libpq/pqsignal.h"
 #include "pqexpbuffer.h"
+#include "receivelog.h"
 #include "streamutil.h"
 
 /* Time to sleep between reconnection attempts */
 #define RECONNECT_SLEEP_TIME 5
 
+#ifndef EXTENTION_BUILD
+#define debug printf
+#else
+#define debug(...) elog(INFO, __VA_ARGS__)
+#endif
+
 /* Global Options */
-static char *outfile = NULL;
 static int	verbose = 0;
-static int	noloop = 0;
 static int	standby_message_timeout = 10 * 1000;	/* 10 sec = default */
 static int	fsync_interval = 10 * 1000; /* 10 sec = default */
 static XLogRecPtr startpos = InvalidXLogRecPtr;
 static XLogRecPtr endpos = InvalidXLogRecPtr;
-static bool do_create_slot = false;
-static bool slot_exists_ok = false;
 static bool do_start_slot = false;
-static bool do_drop_slot = false;
 static char *replication_slot = NULL;
 
 /* filled pairwise with option, value. value may be NULL */
@@ -52,61 +54,15 @@ static size_t noptions = 0;
 static const char *plugin = "test_decoding";
 
 /* Global State */
-static int	outfd = -1;
 static volatile sig_atomic_t time_to_abort = false;
-static volatile sig_atomic_t output_reopen = false;
-static bool output_isfile;
 static TimestampTz output_last_fsync = -1;
 static bool output_needs_fsync = false;
 static XLogRecPtr output_written_lsn = InvalidXLogRecPtr;
 static XLogRecPtr output_fsync_lsn = InvalidXLogRecPtr;
 
-static void usage(void);
-static void StreamLogicalLog(void);
 static bool flushAndSendFeedback(PGconn *conn, TimestampTz *now);
 static void prepareToTerminate(PGconn *conn, XLogRecPtr endpos,
 							   bool keepalive, XLogRecPtr lsn);
-
-static void
-usage(void)
-{
-	printf(_("%s controls PostgreSQL logical decoding streams.\n\n"),
-		   progname);
-	printf(_("Usage:\n"));
-	printf(_("  %s [OPTION]...\n"), progname);
-	printf(_("\nAction to be performed:\n"));
-	printf(_("      --create-slot      create a new replication slot (for the slot's name see --slot)\n"));
-	printf(_("      --drop-slot        drop the replication slot (for the slot's name see --slot)\n"));
-	printf(_("      --start            start streaming in a replication slot (for the slot's name see --slot)\n"));
-	printf(_("\nOptions:\n"));
-	printf(_("  -E, --endpos=LSN       exit after receiving the specified LSN\n"));
-	printf(_("  -f, --file=FILE        receive log into this file, - for stdout\n"));
-	printf(_("  -F  --fsync-interval=SECS\n"
-			 "                         time between fsyncs to the output file (default: %d)\n"), (fsync_interval / 1000));
-	printf(_("      --if-not-exists    do not error if slot already exists when creating a slot\n"));
-	printf(_("  -I, --startpos=LSN     where in an existing slot should the streaming start\n"));
-	printf(_("  -n, --no-loop          do not loop on connection lost\n"));
-	printf(_("  -o, --option=NAME[=VALUE]\n"
-			 "                         pass option NAME with optional value VALUE to the\n"
-			 "                         output plugin\n"));
-	printf(_("  -P, --plugin=PLUGIN    use output plugin PLUGIN (default: %s)\n"), plugin);
-	printf(_("  -s, --status-interval=SECS\n"
-			 "                         time between status packets sent to server (default: %d)\n"), (standby_message_timeout / 1000));
-	printf(_("  -S, --slot=SLOTNAME    name of the logical replication slot\n"));
-	printf(_("  -v, --verbose          output verbose messages\n"));
-	printf(_("  -V, --version          output version information, then exit\n"));
-	printf(_("  -?, --help             show this help, then exit\n"));
-	printf(_("\nConnection options:\n"));
-	printf(_("  -d, --dbname=DBNAME    database to connect to\n"));
-	printf(_("  -h, --host=HOSTNAME    database server host or socket directory\n"));
-	printf(_("  -p, --port=PORT        database server port number\n"));
-	printf(_("  -U, --username=NAME    connect as specified database user\n"));
-	printf(_("  -w, --no-password      never prompt for password\n"));
-	printf(_("  -W, --password         force password prompt (should happen automatically)\n"));
-	printf(_("\nReport bugs to <%s>.\n"), PACKAGE_BUGREPORT);
-	printf(_("%s home page: <%s>\n"), PACKAGE_NAME, PACKAGE_URL);
-}
-
 /*
  * Send a Standby Status Update message to server.
  */
@@ -129,7 +85,7 @@ static bool sendFeedback(PGconn *conn, TimestampTz now, bool force, bool replyRe
 		return true;
 
 	if (verbose)
-		pg_log_info("confirming write up to %X/%X, flush to %X/%X (slot %s)",
+		debug( "confirming write up to %X/%X, flush to %X/%X (slot %s)",
 					(uint32) (output_written_lsn >> 32), (uint32) output_written_lsn,
 					(uint32) (output_fsync_lsn >> 32), (uint32) output_fsync_lsn,
 					replication_slot);
@@ -153,7 +109,7 @@ static bool sendFeedback(PGconn *conn, TimestampTz now, bool force, bool replyRe
 
 	if (PQputCopyData(conn, replybuf, len) <= 0 || PQflush(conn))
 	{
-		pg_log_error("could not send feedback packet: %s",
+		debug("could not send feedback packet: %s",
 					 PQerrorMessage(conn));
 		return false;
 	}
@@ -184,51 +140,13 @@ OutputFsync(TimestampTz now)
 	output_needs_fsync = false;
 
 	/* can only fsync if it's a regular file */
-	if (!output_isfile)
-		return true;
-
-	if (fsync(outfd) != 0)
-	{
-		pg_log_fatal("could not fsync file \"%s\": %m", outfile);
-		exit(1);
-	}
-
 	return true;
 }
 
-void pg_recvlogical_stream_logical_start(const void* context, pg_recvlogical_on_changes_callback_f on_changes)
-{
-	/* Stream loop */
-	while (true)
-	{
-		log_streaming(context, on_changes);
-
-		if (time_to_abort)
-		{
-			/*
-			 * We've been Ctrl-C'ed or reached an exit limit condition. That's
-			 * not an error, so exit without an errorcode.
-			 */
-			return;
-		}
-		else if (noloop)
-		{
-			pg_log_error("disconnected");
-			return;
-		}
-		else
-		{
-			/* translator: check source for value for %d */
-			pg_log_info("disconnected; waiting %d seconds to try again",
-						RECONNECT_SLEEP_TIME);
-			pg_usleep(RECONNECT_SLEEP_TIME * 1000000);
-		}
-	}
-}
 /*
  * Start the log streaming
  */
-void log_streaming(const void* context, pg_recvlogical_on_changes_callback_f on_changes)
+static void log_streaming(const void* context, pg_recvlogical_on_changes_callback_f on_changes)
 {
 	PGresult   *res;
 	char	   *copybuf = NULL;
@@ -245,7 +163,9 @@ void log_streaming(const void* context, pg_recvlogical_on_changes_callback_f on_
 	 * Connect in replication mode to the server
 	 */
 	if (!conn)
+	{
 		conn = GetConnection();
+	}
 	if (!conn)
 		/* Error message already written in GetConnection() */
 		return;
@@ -254,7 +174,7 @@ void log_streaming(const void* context, pg_recvlogical_on_changes_callback_f on_
 	 * Start the replication
 	 */
 	if (verbose)
-		pg_log_info("starting log streaming at %X/%X (slot %s)",
+		debug( "starting log streaming at %X/%X (slot %s)\n",
 					(uint32) (startpos >> 32), (uint32) startpos,
 					replication_slot);
 
@@ -286,16 +206,17 @@ void log_streaming(const void* context, pg_recvlogical_on_changes_callback_f on_
 	res = PQexec(conn, query->data);
 	if (PQresultStatus(res) != PGRES_COPY_BOTH)
 	{
-		pg_log_error("could not send replication command \"%s\": %s",
+		debug("could not send replication command \"%s\": %s\n",
 					 query->data, PQresultErrorMessage(res));
 		PQclear(res);
 		goto error;
 	}
 	PQclear(res);
+
 	resetPQExpBuffer(query);
 
 	if (verbose)
-		pg_log_info("streaming initiated");
+		debug( "streaming initiated");
 
 	while (!time_to_abort)
 	{
@@ -317,8 +238,7 @@ void log_streaming(const void* context, pg_recvlogical_on_changes_callback_f on_
 		 */
 		now = feGetCurrentTimestamp();
 
-		if (outfd != -1 &&
-			feTimestampDifferenceExceeds(output_last_fsync, now,
+		if (feTimestampDifferenceExceeds(output_last_fsync, now,
 										 fsync_interval))
 		{
 			if (!OutputFsync(now))
@@ -336,17 +256,6 @@ void log_streaming(const void* context, pg_recvlogical_on_changes_callback_f on_
 			last_status = now;
 		}
 
-		/* got SIGHUP, close output file */
-		if (outfd != -1 && output_reopen && strcmp(outfile, "-") != 0)
-		{
-			now = feGetCurrentTimestamp();
-			if (!OutputFsync(now))
-				goto error;
-			close(outfd);
-			outfd = -1;
-		}
-		output_reopen = false;
-
 		r = PQgetCopyData(conn, &copybuf, 1);
 		if (r == 0)
 		{
@@ -363,7 +272,7 @@ void log_streaming(const void* context, pg_recvlogical_on_changes_callback_f on_
 
 			if (PQsocket(conn) < 0)
 			{
-				pg_log_error("invalid socket: %s", PQerrorMessage(conn));
+				debug("invalid socket: %s", PQerrorMessage(conn));
 				goto error;
 			}
 
@@ -416,14 +325,14 @@ void log_streaming(const void* context, pg_recvlogical_on_changes_callback_f on_
 			}
 			else if (r < 0)
 			{
-				pg_log_error("select() failed: %m");
+				debug("select() failed: %m");
 				goto error;
 			}
 
 			/* Else there is actually data on the socket */
 			if (PQconsumeInput(conn) == 0)
 			{
-				pg_log_error("could not receive data from WAL stream: %s",
+				debug("could not receive data from WAL stream: %s",
 							 PQerrorMessage(conn));
 				goto error;
 			}
@@ -437,7 +346,7 @@ void log_streaming(const void* context, pg_recvlogical_on_changes_callback_f on_
 		/* Failure while reading the copy stream */
 		if (r == -2)
 		{
-			pg_log_error("could not read COPY data: %s",
+			debug("could not read COPY data: %s",
 						 PQerrorMessage(conn));
 			goto error;
 		}
@@ -465,7 +374,7 @@ void log_streaming(const void* context, pg_recvlogical_on_changes_callback_f on_
 
 			if (r < pos + 1)
 			{
-				pg_log_error("streaming header too small: %d", r);
+				debug("streaming header too small: %d", r);
 				goto error;
 			}
 			replyRequested = copybuf[pos];
@@ -500,7 +409,7 @@ void log_streaming(const void* context, pg_recvlogical_on_changes_callback_f on_
 		}
 		else if (copybuf[0] != 'w')
 		{
-			pg_log_error("unrecognized streaming header: \"%c\"",
+			debug("unrecognized streaming header: \"%c\"",
 						 copybuf[0]);
 			goto error;
 		}
@@ -516,7 +425,7 @@ void log_streaming(const void* context, pg_recvlogical_on_changes_callback_f on_
 		hdr_len += 8;			/* sendTime */
 		if (r < hdr_len + 1)
 		{
-			pg_log_error("streaming header too small: %d", r);
+			debug("streaming header too small: %d", r);
 			goto error;
 		}
 
@@ -544,7 +453,11 @@ void log_streaming(const void* context, pg_recvlogical_on_changes_callback_f on_
 		/* signal that a fsync is needed */
 		output_needs_fsync = true;
 
-		on_changes(context, copybuf + hdr_len, bytes_left);
+		if(on_changes)
+		{
+			debug(" on_changes initiated: %s\n", copybuf + hdr_len);
+			on_changes(context, copybuf + hdr_len, bytes_left);
+		}
 
 		if (endpos != InvalidXLogRecPtr && cur_record_lsn == endpos)
 		{
@@ -569,7 +482,7 @@ void log_streaming(const void* context, pg_recvlogical_on_changes_callback_f on_
 	}
 	else if (PQresultStatus(res) != PGRES_COMMAND_OK)
 	{
-		pg_log_error("unexpected termination of replication stream: %s",
+		debug("unexpected termination of replication stream: %s",
 					 PQresultErrorMessage(res));
 		goto error;
 	}
@@ -583,6 +496,33 @@ error:
 	destroyPQExpBuffer(query);
 	PQfinish(conn);
 	conn = NULL;
+}
+
+void pg_recvlogical_stream_logical_start(const void* context, pg_recvlogical_on_changes_callback_f on_changes)
+{
+	/* Stream loop */
+	debug( "pg_recvlogical_stream_logical_start");
+
+	while (true)
+	{
+		log_streaming(context, on_changes);
+
+		if (time_to_abort)
+		{
+			/*
+			 * We've been Ctrl-C'ed or reached an exit limit condition. That's
+			 * not an error, so exit without an errorcode.
+			 */
+			return;
+		}
+		else
+		{
+			/* translator: check source for value for %d */
+			debug( "disconnected; waiting %d seconds to try again",
+						RECONNECT_SLEEP_TIME);
+			pg_usleep(RECONNECT_SLEEP_TIME * 1000000);
+		}
+	}
 }
 
 /*
@@ -606,249 +546,31 @@ sigint_handler(int signum)
 static void
 sighup_handler(int signum)
 {
-	output_reopen = true;
+	//output_reopen = true;
 }
 #endif
 
-
-int
-pg_recvlogical_init(int argc, char **argv)
+static void XloGPositionFromString(const char * xlog)
 {
-	static struct option long_options[] = {
-/* general options */
-		{"file", required_argument, NULL, 'f'},
-		{"fsync-interval", required_argument, NULL, 'F'},
-		{"no-loop", no_argument, NULL, 'n'},
-		{"verbose", no_argument, NULL, 'v'},
-		{"version", no_argument, NULL, 'V'},
-		{"help", no_argument, NULL, '?'},
-/* connection options */
-		{"dbname", required_argument, NULL, 'd'},
-		{"host", required_argument, NULL, 'h'},
-		{"port", required_argument, NULL, 'p'},
-		{"username", required_argument, NULL, 'U'},
-		{"no-password", no_argument, NULL, 'w'},
-		{"password", no_argument, NULL, 'W'},
-/* replication options */
-		{"startpos", required_argument, NULL, 'I'},
-		{"endpos", required_argument, NULL, 'E'},
-		{"option", required_argument, NULL, 'o'},
-		{"plugin", required_argument, NULL, 'P'},
-		{"status-interval", required_argument, NULL, 's'},
-		{"slot", required_argument, NULL, 'S'},
-/* action */
-		{"create-slot", no_argument, NULL, 1},
-		{"start", no_argument, NULL, 2},
-		{"drop-slot", no_argument, NULL, 3},
-		{"if-not-exists", no_argument, NULL, 4},
-		{NULL, 0, NULL, 0}
-	};
-	int			c;
-	int			option_index;
-	uint32		hi,
-				lo;
-	char	   *db_name;
+	uint32	hi, lo;
 
-	pg_logging_init(argv[0]);
-	progname = get_progname(argv[0]);
-	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_basebackup"));
-
-	if (argc > 1)
+	if (sscanf(xlog, "%X/%X", &hi, &lo) != 2)
 	{
-		if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-?") == 0)
-		{
-			usage();
-			exit(0);
-		}
-		else if (strcmp(argv[1], "-V") == 0 ||
-				 strcmp(argv[1], "--version") == 0)
-		{
-			puts("pg_recvlogical (PostgreSQL) " PG_VERSION);
-			exit(0);
-		}
+		debug("could not parse start position \"%s\"", optarg);
+		exit(1);
 	}
-
-	while ((c = getopt_long(argc, argv, "E:f:F:nvd:h:p:U:wWI:o:P:s:S:",
-							long_options, &option_index)) != -1)
+	startpos = ((uint64) hi) << 32 | lo;
+	if (sscanf(optarg, "%X/%X", &hi, &lo) != 2)
 	{
-		switch (c)
-		{
-/* general options */
-			case 'f':
-				outfile = pg_strdup(optarg);
-				break;
-			case 'F':
-				fsync_interval = atoi(optarg) * 1000;
-				if (fsync_interval < 0)
-				{
-					pg_log_error("invalid fsync interval \"%s\"", optarg);
-					exit(1);
-				}
-				break;
-			case 'n':
-				noloop = 1;
-				break;
-			case 'v':
-				verbose++;
-				break;
-/* connection options */
-			case 'd':
-				dbname = pg_strdup(optarg);
-				break;
-			case 'h':
-				dbhost = pg_strdup(optarg);
-				break;
-			case 'p':
-				if (atoi(optarg) <= 0)
-				{
-					pg_log_error("invalid port number \"%s\"", optarg);
-					exit(1);
-				}
-				dbport = pg_strdup(optarg);
-				break;
-			case 'U':
-				dbuser = pg_strdup(optarg);
-				break;
-			case 'w':
-				dbgetpassword = -1;
-				break;
-			case 'W':
-				dbgetpassword = 1;
-				break;
-/* replication options */
-			case 'I':
-				if (sscanf(optarg, "%X/%X", &hi, &lo) != 2)
-				{
-					pg_log_error("could not parse start position \"%s\"", optarg);
-					exit(1);
-				}
-				startpos = ((uint64) hi) << 32 | lo;
-				break;
-			case 'E':
-				if (sscanf(optarg, "%X/%X", &hi, &lo) != 2)
-				{
-					pg_log_error("could not parse end position \"%s\"", optarg);
-					exit(1);
-				}
-				endpos = ((uint64) hi) << 32 | lo;
-				break;
-			case 'o':
-				{
-					char	   *data = pg_strdup(optarg);
-					char	   *val = strchr(data, '=');
-
-					if (val != NULL)
-					{
-						/* remove =; separate data from val */
-						*val = '\0';
-						val++;
-					}
-
-					noptions += 1;
-					options = pg_realloc(options, sizeof(char *) * noptions * 2);
-
-					options[(noptions - 1) * 2] = data;
-					options[(noptions - 1) * 2 + 1] = val;
-				}
-
-				break;
-			case 'P':
-				plugin = pg_strdup(optarg);
-				break;
-			case 's':
-				standby_message_timeout = atoi(optarg) * 1000;
-				if (standby_message_timeout < 0)
-				{
-					pg_log_error("invalid status interval \"%s\"", optarg);
-					exit(1);
-				}
-				break;
-			case 'S':
-				replication_slot = pg_strdup(optarg);
-				break;
-/* action */
-			case 1:
-				do_create_slot = true;
-				break;
-			case 2:
-				do_start_slot = true;
-				break;
-			case 3:
-				do_drop_slot = true;
-				break;
-			case 4:
-				slot_exists_ok = true;
-				break;
-
-			default:
-
-				/*
-				 * getopt_long already emitted a complaint
-				 */
-				fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
-						progname);
-				exit(1);
-		}
+		debug("could not parse end position \"%s\"", optarg);
+		exit(1);
 	}
+	endpos = ((uint64) hi) << 32 | lo;
 
 	/*
-	 * Any non-option arguments?
-	 */
-	if (optind < argc)
-	{
-		pg_log_error("too many command-line arguments (first is \"%s\")",
-					 argv[optind]);
-		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
-				progname);
-		exit(1);
-	}
-
-	/*
-	 * Required arguments
-	 */
-	if (replication_slot == NULL)
-	{
-		pg_log_error("no slot specified");
-		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
-				progname);
-		exit(1);
-	}
-
-	if (do_start_slot && outfile == NULL)
-	{
-		pg_log_error("no target file specified");
-		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
-				progname);
-		exit(1);
-	}
-
-	if (!do_drop_slot && dbname == NULL)
-	{
-		pg_log_error("no database specified");
-		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
-				progname);
-		exit(1);
-	}
-
-	if (!do_drop_slot && !do_create_slot && !do_start_slot)
-	{
-		pg_log_error("at least one action needs to be specified");
-		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
-				progname);
-		exit(1);
-	}
-
-	if (do_drop_slot && (do_create_slot || do_start_slot))
-	{
-		pg_log_error("cannot use --create-slot or --start together with --drop-slot");
-		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
-				progname);
-		exit(1);
-	}
-
 	if (startpos != InvalidXLogRecPtr && (do_create_slot || do_drop_slot))
 	{
-		pg_log_error("cannot use --create-slot or --drop-slot together with --startpos");
+		debug("cannot use --create-slot or --drop-slot together with --startpos");
 		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
 				progname);
 		exit(1);
@@ -856,7 +578,60 @@ pg_recvlogical_init(int argc, char **argv)
 
 	if (endpos != InvalidXLogRecPtr && !do_start_slot)
 	{
-		pg_log_error("--endpos may only be specified with --start");
+		debug("--endpos may only be specified with --start");
+		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
+				progname);
+		exit(1);
+	}
+*/
+}
+
+static void parseSetOptions(char* data)
+{
+	char *val = strchr(data, '=');
+	if (val != NULL)
+	{
+		/* remove =; separate data from val */
+		*val = '\0';
+		val++;
+	}
+	noptions += 1;
+	options = pg_realloc(options, sizeof(char *) * noptions * 2);
+	options[(noptions - 1) * 2] = data;
+	options[(noptions - 1) * 2 + 1] = val;
+}
+
+int
+pg_recvlogical_init(const struct pg_recvlogical_init_settings_t* pg_recvlogical_settings, const char* exec_path)
+{
+	int			c;
+	int			option_index;
+	uint32		hi,
+				lo;
+	char	   *db_name;
+
+	if(pg_recvlogical_settings->_connection._password == NULL)
+		dbgetpassword = -1;
+	else
+		dbgetpassword = 1;
+
+	dbname = pg_recvlogical_settings->_connection._dbname;
+	dbhost = pg_recvlogical_settings->_connection._host;
+	dbport = pg_recvlogical_settings->_connection._port;
+	dbuser = pg_recvlogical_settings->_connection._username;
+	verbose = pg_recvlogical_settings->_verbose;
+	//parseSetOptions();
+	//XloGPositionFromString();
+	plugin = pg_recvlogical_settings->_repication._plugin;
+	replication_slot = pg_recvlogical_settings->_repication._slot;
+	standby_message_timeout = pg_recvlogical_settings->_repication._status_interval * 1000;
+	verbose = 1;
+	/*
+	 * Required arguments
+	 */
+	if (replication_slot == NULL)
+	{
+		debug("no slot specified");
 		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
 				progname);
 		exit(1);
@@ -887,10 +662,11 @@ pg_recvlogical_init(int argc, char **argv)
 
 	if (db_name == NULL)
 	{
-		pg_log_error("could not establish database-specific replication connection");
+		debug("could not establish database-specific replication connection");
 		exit(1);
 	}
 
+	debug( "pg_recvlogical_init");
 	/*
 	 * Set umask so that directories/files are created with the same
 	 * permissions as directories/files in the source data directory.
@@ -901,30 +677,7 @@ pg_recvlogical_init(int argc, char **argv)
 	 */
 	umask(pg_mode_mask);
 
-	/* Drop a replication slot. */
-	if (do_drop_slot)
-	{
-		if (verbose)
-			pg_log_info("dropping replication slot \"%s\"", replication_slot);
-
-		if (!DropReplicationSlot(conn, replication_slot))
-			exit(1);
-	}
-
-	/* Create a replication slot. */
-	if (do_create_slot)
-	{
-		if (verbose)
-			pg_log_info("creating replication slot \"%s\"", replication_slot);
-
-		if (!CreateReplicationSlot(conn, replication_slot, plugin, false,
-								   false, false, slot_exists_ok))
-			exit(1);
-		startpos = InvalidXLogRecPtr;
-	}
-
-	if (!do_start_slot)
-		exit(0);
+	return 0;
 }
 
 /*
@@ -960,10 +713,10 @@ prepareToTerminate(PGconn *conn, XLogRecPtr endpos, bool keepalive, XLogRecPtr l
 	if (verbose)
 	{
 		if (keepalive)
-			pg_log_info("end position %X/%X reached by keepalive",
+			debug( "end position %X/%X reached by keepalive",
 						(uint32) (endpos >> 32), (uint32) endpos);
 		else
-			pg_log_info("end position %X/%X reached by WAL record at %X/%X",
+			debug( "end position %X/%X reached by WAL record at %X/%X",
 						(uint32) (endpos >> 32), (uint32) (endpos),
 						(uint32) (lsn >> 32), (uint32) lsn);
 	}

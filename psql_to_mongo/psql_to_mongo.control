@@ -1,0 +1,5 @@
+# psql_to_mongo extension
+comment = 'psql_to_mongo datatype'
+default_version = '0.0.1'
+module_pathname = '$libdir/psql_to_mongo'
+relocatable = true

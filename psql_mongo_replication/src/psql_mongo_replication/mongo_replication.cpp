@@ -1,7 +1,9 @@
 #include "psql_mongo_replication/mongo_replication.hpp"
+#include "pg_recvlogical/pg_recvlogical.h"
 #include <mongoc.h>
 #include "stdafx.hpp"
-
+namespace
+{
 static void print_bson (const bson_t *b)
 {
    char *str;
@@ -64,16 +66,18 @@ int mongo_test (mongoc_client_t* client, const std::string& db_name)
 
     bson_error_t error;
 
+    printf ("mongoc_client_command_simple\n");
+
     retval = mongoc_client_command_simple (
         client, "admin", command, NULL, &reply, &error);
 
     if (!retval) {
-        fprintf (stderr, "%s\n", error.message);
+        printf ("%s\n", error.message);
         return EXIT_FAILURE;
     }
 
     str = bson_as_json (&reply, NULL);
-    printf ("%s\n", str);
+    printf ("bson_as_json: %s\n", str);
 
     insert = BCON_NEW ("hello", BCON_UTF8 ("world"));
 
@@ -97,6 +101,7 @@ int mongo_test (mongoc_client_t* client, const std::string& db_name)
 
 mongoc_client_t* init(const std::string& uri_string, mongoc_uri_t *uri)
 {
+     std::cout << "mongoc_client_t init" << std::endl;
     /*
     * Required to initialize libmongoc's internals
     */
@@ -122,12 +127,42 @@ mongoc_client_t* init(const std::string& uri_string, mongoc_uri_t *uri)
     return mongoc_client_new_from_uri (uri);
 }
 
+//mongodb://[username:password@]host1[:port1][,...hostN[:portN]][/[defaultauthdb][?options]]
+std::string make_uri(      
+      const char* dbname
+    , const char* port
+    , const char* host
+    , const char* username
+    , const char* password)
+{
+    std::stringstream ss;
+
+    ss << "mongodb://";
+
+    if(username && password)
+       ss << username << ":" << password << "@";
+ 
+    ss << host <<":"<< port << "/" << dbname;
+
+    return ss.str();
+}
+
+}
 namespace psql_mongo_replication
 {
 
-mongo_replication::mongo_replication(): _db_name("db_name")
+mongo_replication::mongo_replication(const pg_recvlogical_connection_settings_t& connection): 
+      _db_name(connection._dbname)
+    , _id(connection._id)
 {
-    const std::string uri_string = "mongodb://localhost:27017";
+    const std::string uri_string = make_uri(
+          connection._dbname
+        , connection._port
+        , connection._host
+        , connection._username
+        , connection._password);
+
+    std::cout << "uri_string: " << uri_string << std::endl;
 
     _client = init(uri_string, _uri);
     
@@ -198,8 +233,20 @@ void mongo_replication::deleteDocs(const std::string& collectionName, const std:
     }
 }
 
+unsigned int mongo_replication::get_id()
+{
+    return _id;
+}
+
+bool mongo_replication::connected()
+{
+    return mongoc_client_get_database (_client, _db_name.c_str()) != nullptr;
+}
+
 void mongo_replication::test()
 {
+    std::cout << __FUNCTION__ << std::endl;
+
     mongo_test(_client, _db_name);
 }
 

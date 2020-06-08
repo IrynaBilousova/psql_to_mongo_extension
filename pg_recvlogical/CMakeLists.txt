@@ -4,6 +4,11 @@ project (pg_recvlogical LANGUAGES C)
 
 add_library(pg_recvlogical STATIC)
 
+target_include_directories(pg_recvlogical
+    INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 target_sources(pg_recvlogical
     PUBLIC
     include/pg_recvlogical/pg_recvlogical.h
@@ -35,9 +40,11 @@ endif()
 message(PKGLIBDIR "-${PKGLIBDIR}")
 message(PSQLLIBS "${LIBS}")
 
-find_library(pgport_library pgport HINTS ${PKGLIBDIR})
+find_library(pgport_library pgport_shlib HINTS ${PKGLIBDIR})
 
-find_library(pgcommon_library pgcommon HINTS ${PKGLIBDIR})
+find_library(pgcommon_library pgcommon_shlib HINTS ${PKGLIBDIR})
+
+find_library(pgfeutils_library pgfeutils HINTS ${PKGLIBDIR})
 
 target_link_libraries(pg_recvlogical PUBLIC ${pgcommon_library} ${pgport_library} pq)
 

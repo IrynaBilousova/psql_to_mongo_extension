@@ -3,6 +3,7 @@
 *.pbd
 *.pbd.browse
 *.o
+*.so
 *.dep
 *.cspy.bat
 *.xcl
@@ -27,6 +28,7 @@
 *.pbi
 *.ewt
 *.ewd
+*.bc
 *Debug
 *settings
 *051-Debug
@@ -43,3 +45,4 @@ button/iar/LogFile1.log
 externals_build
 *.ninja*
 builds
+build

@@ -1,5 +1,0 @@
-# psql_mongo_replication extension
-comment = 'psql_mongo_replication datatype'
-default_version = '0.0.1'
-module_pathname = '$libdir/psql_mongo_replication_extention'
-relocatable = true

@@ -17,3 +17,8 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # psql_mongo_replication
 add_subdirectory(pg_recvlogical)
 add_subdirectory(psql_mongo_replication)
+
+execute_process(COMMAND export CURRENT_BUILD_DIR=${CMAKE_CURRENT_SOURCE_DIR})
+
+add_custom_target(extention_install COMMAND make install
+                   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/psql_to_mongo)
