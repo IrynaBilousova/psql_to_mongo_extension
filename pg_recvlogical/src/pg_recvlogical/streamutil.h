@@ -22,6 +22,7 @@ extern char *dbhost;
 extern char *dbuser;
 extern char *dbport;
 extern char *dbname;
+extern char password[100];
 extern int	dbgetpassword;
 extern uint32 WalSegSz;
 

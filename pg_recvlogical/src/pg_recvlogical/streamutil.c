@@ -45,12 +45,13 @@ static bool RetrieveDataDirCreatePerm(PGconn *conn);
 const char *progname;
 char	   *connection_string = NULL;
 char	   *dbhost = NULL;
+char        password[100];
 char	   *dbuser = NULL;
 char	   *dbport = NULL;
 char	   *dbname = NULL;
 int			dbgetpassword = 0;	/* 0=auto, -1=never, 1=always */
 static bool have_password = false;
-static char password[100];
+
 PGconn	   *conn = NULL;
 
 /*
@@ -157,7 +158,7 @@ GetConnection(void)
 		/* Get a new password if appropriate */
 		if (need_password)
 		{
-			simple_prompt("Password: ", password, sizeof(password), false);
+			//simple_prompt("Password: ", password, sizeof(password), false);
 			have_password = true;
 			need_password = false;
 		}

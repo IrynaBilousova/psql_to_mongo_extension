@@ -613,13 +613,21 @@ pg_recvlogical_init(const struct pg_recvlogical_init_settings_t* pg_recvlogical_
 	if(pg_recvlogical_settings->_connection._password == NULL)
 		dbgetpassword = -1;
 	else
+	{
+		uint32_t size  = strlen(pg_recvlogical_settings->_connection._password);
+
+		size = size > sizeof(password)? sizeof(password): size;
+
+		memcpy(password, pg_recvlogical_settings->_connection._password, size);
 		dbgetpassword = 1;
+	}
 
 	dbname = pg_recvlogical_settings->_connection._dbname;
 	dbhost = pg_recvlogical_settings->_connection._host;
 	dbport = pg_recvlogical_settings->_connection._port;
 	dbuser = pg_recvlogical_settings->_connection._username;
 	verbose = pg_recvlogical_settings->_verbose;
+
 	//parseSetOptions();
 	//XloGPositionFromString();
 	plugin = pg_recvlogical_settings->_repication._plugin;
