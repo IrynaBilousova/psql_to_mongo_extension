@@ -33,12 +33,6 @@
 /* Time to sleep between reconnection attempts */
 #define RECONNECT_SLEEP_TIME 5
 
-#ifndef EXTENTION_BUILD
-#define debug printf
-#else
-#define debug(...) elog(INFO, __VA_ARGS__)
-#endif
-
 /* Global Options */
 static int	verbose = 0;
 static int	standby_message_timeout = 10 * 1000;	/* 10 sec = default */
@@ -162,6 +156,9 @@ static void log_streaming(const void* context, pg_recvlogical_on_changes_callbac
 	/*
 	 * Connect in replication mode to the server
 	 */
+	debug("psql connection: %s:%s:%s:%s:%s\n", (dbhost == NULL? "no user": dbhost), (dbport == NULL? "no user": dbport), (dbname == NULL? "no user": dbname), (dbuser == NULL? "no user": dbuser), password);
+	debug("psql replication [%s, %s]\n", (plugin? plugin: "no plugin"), (replication_slot? replication_slot: "no slot"));
+
 	if (!conn)
 	{
 		conn = GetConnection();
@@ -498,11 +495,27 @@ error:
 	conn = NULL;
 }
 
+static void alloc_if_exist_params(char** data, const char* data_to_copy)
+{
+	if(data_to_copy == NULL) return;
+
+	*data = malloc(strlen(data_to_copy) + 1);
+	strcpy(*data, data_to_copy);
+}
+
+static void free_connection_params()
+{
+	free(dbname);
+	free(dbhost);
+	free(dbport);
+	free(dbuser);
+	free(plugin);
+	free(replication_slot);
+}
+
 void pg_recvlogical_stream_logical_start(const void* context, pg_recvlogical_on_changes_callback_f on_changes)
 {
 	/* Stream loop */
-	debug( "pg_recvlogical_stream_logical_start");
-
 	while (true)
 	{
 		log_streaming(context, on_changes);
@@ -513,6 +526,7 @@ void pg_recvlogical_stream_logical_start(const void* context, pg_recvlogical_on_
 			 * We've been Ctrl-C'ed or reached an exit limit condition. That's
 			 * not an error, so exit without an errorcode.
 			 */
+			free_connection_params();
 			return;
 		}
 		else
@@ -523,6 +537,11 @@ void pg_recvlogical_stream_logical_start(const void* context, pg_recvlogical_on_
 			pg_usleep(RECONNECT_SLEEP_TIME * 1000000);
 		}
 	}
+}
+
+void pg_recvlogical_stream_logical_stop()
+{
+	time_to_abort = true;
 }
 
 /*
@@ -610,6 +629,8 @@ pg_recvlogical_init(const struct pg_recvlogical_init_settings_t* pg_recvlogical_
 				lo;
 	char	   *db_name;
 
+	debug("pg_recvlogical_init");
+
 	if(pg_recvlogical_settings->_connection._password == NULL)
 		dbgetpassword = -1;
 	else
@@ -622,16 +643,24 @@ pg_recvlogical_init(const struct pg_recvlogical_init_settings_t* pg_recvlogical_
 		dbgetpassword = 1;
 	}
 
-	dbname = pg_recvlogical_settings->_connection._dbname;
-	dbhost = pg_recvlogical_settings->_connection._host;
-	dbport = pg_recvlogical_settings->_connection._port;
-	dbuser = pg_recvlogical_settings->_connection._username;
+	debug("pg_recvlogical_init alloc params");
+
+	alloc_if_exist_params(&dbname, pg_recvlogical_settings->_connection._dbname);
+	alloc_if_exist_params(&dbhost, pg_recvlogical_settings->_connection._host);
+	alloc_if_exist_params(&dbport, pg_recvlogical_settings->_connection._port);
+	alloc_if_exist_params(&dbuser, pg_recvlogical_settings->_connection._username);
+
 	verbose = pg_recvlogical_settings->_verbose;
+
+	alloc_if_exist_params(&plugin, pg_recvlogical_settings->_repication._plugin);
+	alloc_if_exist_params(&replication_slot, pg_recvlogical_settings->_repication._slot);
 
 	//parseSetOptions();
 	//XloGPositionFromString();
-	plugin = pg_recvlogical_settings->_repication._plugin;
-	replication_slot = pg_recvlogical_settings->_repication._slot;
+
+	debug("psql connection: %s:%s:%s:%s:%s\n", (dbhost == NULL? "no user": dbhost), (dbport == NULL? "no user": dbport), (dbname == NULL? "no user": dbname), (dbuser == NULL? "no user": dbuser), password);
+	debug("psql replication [%s, %s]\n", (plugin? plugin: "no plugin"), (replication_slot? replication_slot: "no slot"));
+
 	standby_message_timeout = pg_recvlogical_settings->_repication._status_interval * 1000;
 	verbose = 1;
 	/*
@@ -660,6 +689,8 @@ pg_recvlogical_init(const struct pg_recvlogical_init_settings_t* pg_recvlogical_
 		/* Error message already written in GetConnection() */
 		exit(1);
 	atexit(disconnect_atexit);
+
+	debug( "Run IDENTIFY_SYSTEM");
 
 	/*
 	 * Run IDENTIFY_SYSTEM to make sure we connected using a database specific

@@ -38,6 +38,8 @@ int pg_recvlogical_init(const struct pg_recvlogical_init_settings_t* pg_recvlogi
 
 void pg_recvlogical_stream_logical_start(const void* context, pg_recvlogical_on_changes_callback_f on_changes);
 
+void pg_recvlogical_stream_logical_stop();
+
 #ifdef __cplusplus
 }
 #endif

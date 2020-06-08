@@ -391,20 +391,20 @@ psql_to_mongo_replication_worker_start(PG_FUNCTION_ARGS)
     char host[NAMEDATALEN];
     copyDataFromArg(host, host_column);
 
+    char username[NAMEDATALEN];
+    copyDataFromArg(username, username_column);
+
     char password[NAMEDATALEN];
     copyDataFromArg(password, pswd_column);
 
-    char username[NAMEDATALEN];
-    copyDataFromArg(username, username_column);
- 
-    elog(INFO, "psql_mongo_replication_cpp_start_replication: '%s', '%s', '%s', '%s', '%s'\n", dbname, port, host, password, username);
+    elog(INFO, "psql_mongo_replication_cpp_start_replication: '%s', '%s', '%s', '%s', '%s'\n", dbname, host, port, username, password);
 
     psql_mongo_replication_cpp_start_replication(
           dbname
-        , port
         , host
-        , password
-        , username);
+        , port
+        , username
+        , password);
 
     elog(INFO, "psql_mongo_replication_cpp_started_replication: SUCCESS\n");
 

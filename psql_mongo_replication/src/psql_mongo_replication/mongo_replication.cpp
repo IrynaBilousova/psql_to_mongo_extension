@@ -188,7 +188,7 @@ void mongo_replication::insert(const std::string& collectionName, const std::str
     mongoc_database_t *database = mongoc_client_get_database (_client, _db_name.c_str());
     mongoc_collection_t *collection = mongoc_client_get_collection (_client, _db_name.c_str(), collectionName.c_str());
 
-    std::cout << collectionName << ":" << changes << std::endl;
+    std::cout << "mongo_replication insert: "<< collectionName << ":" << changes << std::endl;
 
     bson_t *insert = bson_new_from_json ((const uint8_t *)changes.c_str(), changes.size(), &error);
 

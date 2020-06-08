@@ -16,6 +16,12 @@
 #include "datatype/timestamp.h"
 #include "libpq-fe.h"
 
+#ifndef EXTENTION_BUILD
+#define debug printf
+#else
+#define debug(...) elog(INFO, __VA_ARGS__)
+#endif
+
 extern const char *progname;
 extern char *connection_string;
 extern char *dbhost;

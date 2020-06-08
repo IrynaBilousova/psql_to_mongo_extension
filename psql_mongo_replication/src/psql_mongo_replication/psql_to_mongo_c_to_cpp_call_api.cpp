@@ -36,8 +36,8 @@ void psql_mongo_replication_cpp_start_replication(
     host_connection._dbname = dbname;
     host_connection._port = port;
     host_connection._host = host;
-    host_connection._password = password;
     host_connection._username = username;
+    host_connection._password = password;
  
     psqlToMongo.start_replication(host_connection);
 }

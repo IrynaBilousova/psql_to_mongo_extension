@@ -13,7 +13,7 @@
  */
 
 #include "postgres_fe.h"
-
+#include "postgres.h"
 #include <sys/time.h>
 #include <unistd.h>
 
@@ -90,7 +90,7 @@ GetConnection(void)
 		conn_opts = PQconninfoParse(connection_string, &err_msg);
 		if (conn_opts == NULL)
 		{
-			printf("%s", err_msg);
+			debug("%s", err_msg);
 			exit(1);
 		}
 
@@ -153,6 +153,8 @@ GetConnection(void)
 	/* If -W was given, force prompt for password, but only the first time */
 	need_password = (dbgetpassword == 1 && !have_password);
 
+	debug("PQconnectdbParams");
+
 	do
 	{
 		/* Get a new password if appropriate */
@@ -174,24 +176,25 @@ GetConnection(void)
 			keywords[i] = NULL;
 			values[i] = NULL;
 		}
-
+		debug("PQconnectdbParams have_password: %d:%s", have_password, password);
 		tmpconn = PQconnectdbParams(keywords, values, true);
-
 		/*
 		 * If there is too little memory even to allocate the PGconn object
 		 * and PQconnectdbParams returns NULL, we call exit(1) directly.
 		 */
 		if (!tmpconn)
 		{
-			printf("could not connect to server");
+			debug("could not connect to server");
 			exit(1);
 		}
 
 		/* If we need a password and -w wasn't given, loop back and get one */
+		debug("PQstatus: %p", tmpconn);
 		if (PQstatus(tmpconn) == CONNECTION_BAD &&
 			PQconnectionNeedsPassword(tmpconn) &&
 			dbgetpassword != -1)
 		{
+			debug("loop back and get one: CONNECTION_BAD");
 			PQfinish(tmpconn);
 			need_password = true;
 		}
@@ -200,7 +203,7 @@ GetConnection(void)
 
 	if (PQstatus(tmpconn) != CONNECTION_OK)
 	{
-		printf("could not connect to server: %s",
+		debug("could not connect to server: %s",
 					 PQerrorMessage(tmpconn));
 		PQfinish(tmpconn);
 		free(values);
@@ -229,7 +232,7 @@ GetConnection(void)
 		res = PQexec(tmpconn, ALWAYS_SECURE_SEARCH_PATH_SQL);
 		if (PQresultStatus(res) != PGRES_TUPLES_OK)
 		{
-			printf("could not clear search_path: %s",
+			debug("could not clear search_path: %s",
 						 PQerrorMessage(tmpconn));
 			PQclear(res);
 			PQfinish(tmpconn);
@@ -245,14 +248,14 @@ GetConnection(void)
 	tmpparam = PQparameterStatus(tmpconn, "integer_datetimes");
 	if (!tmpparam)
 	{
-		printf("could not determine server setting for integer_datetimes");
+		debug("could not determine server setting for integer_datetimes");
 		PQfinish(tmpconn);
 		exit(1);
 	}
 
 	if (strcmp(tmpparam, "on") != 0)
 	{
-		printf("integer_datetimes compile flag does not match server");
+		debug("integer_datetimes compile flag does not match server");
 		PQfinish(tmpconn);
 		exit(1);
 	}
@@ -266,6 +269,8 @@ GetConnection(void)
 		PQfinish(tmpconn);
 		exit(1);
 	}
+
+	debug("RetrieveDataDirCreatePerm");
 
 	return tmpconn;
 }
@@ -295,7 +300,7 @@ RetrieveWalSegSize(PGconn *conn)
 	res = PQexec(conn, "SHOW wal_segment_size");
 	if (PQresultStatus(res) != PGRES_TUPLES_OK)
 	{
-		printf("could not send replication command \"%s\": %s",
+		debug("could not send replication command \"%s\": %s",
 					 "SHOW wal_segment_size", PQerrorMessage(conn));
 
 		PQclear(res);
@@ -303,7 +308,7 @@ RetrieveWalSegSize(PGconn *conn)
 	}
 	if (PQntuples(res) != 1 || PQnfields(res) < 1)
 	{
-		printf("could not fetch WAL segment size: got %d rows and %d fields, expected %d rows and %d or more fields",
+		debug("could not fetch WAL segment size: got %d rows and %d fields, expected %d rows and %d or more fields",
 					 PQntuples(res), PQnfields(res), 1, 1);
 
 		PQclear(res);
@@ -313,7 +318,7 @@ RetrieveWalSegSize(PGconn *conn)
 	/* fetch xlog value and unit from the result */
 	if (sscanf(PQgetvalue(res, 0, 0), "%d%s", &xlog_val, xlog_unit) != 2)
 	{
-		printf("WAL segment size could not be parsed");
+		debug("WAL segment size could not be parsed");
 		PQclear(res);
 		return false;
 	}
@@ -331,7 +336,7 @@ RetrieveWalSegSize(PGconn *conn)
 
 	if (!IsValidWalSegSize(WalSegSz))
 	{
-		printf(ngettext("WAL segment size must be a power of two between 1 MB and 1 GB, but the remote server reported a value of %d byte",
+		debug(ngettext("WAL segment size must be a power of two between 1 MB and 1 GB, but the remote server reported a value of %d byte",
 							  "WAL segment size must be a power of two between 1 MB and 1 GB, but the remote server reported a value of %d bytes",
 							  WalSegSz),
 					 WalSegSz);
@@ -368,7 +373,7 @@ RetrieveDataDirCreatePerm(PGconn *conn)
 	res = PQexec(conn, "SHOW data_directory_mode");
 	if (PQresultStatus(res) != PGRES_TUPLES_OK)
 	{
-		printf("could not send replication command \"%s\": %s",
+		debug("could not send replication command \"%s\": %s",
 					 "SHOW data_directory_mode", PQerrorMessage(conn));
 
 		PQclear(res);
@@ -376,7 +381,7 @@ RetrieveDataDirCreatePerm(PGconn *conn)
 	}
 	if (PQntuples(res) != 1 || PQnfields(res) < 1)
 	{
-		printf("could not fetch group access flag: got %d rows and %d fields, expected %d rows and %d or more fields",
+		debug("could not fetch group access flag: got %d rows and %d fields, expected %d rows and %d or more fields",
 					 PQntuples(res), PQnfields(res), 1, 1);
 
 		PQclear(res);
@@ -385,7 +390,7 @@ RetrieveDataDirCreatePerm(PGconn *conn)
 
 	if (sscanf(PQgetvalue(res, 0, 0), "%o", &data_directory_mode) != 1)
 	{
-		printf("group access flag could not be parsed: %s",
+		debug("group access flag could not be parsed: %s",
 					 PQgetvalue(res, 0, 0));
 
 		PQclear(res);
@@ -420,7 +425,7 @@ RunIdentifySystem(PGconn *conn, char **sysid, TimeLineID *starttli,
 	res = PQexec(conn, "IDENTIFY_SYSTEM");
 	if (PQresultStatus(res) != PGRES_TUPLES_OK)
 	{
-		printf("could not send replication command \"%s\": %s",
+		debug("could not send replication command \"%s\": %s",
 					 "IDENTIFY_SYSTEM", PQerrorMessage(conn));
 
 		PQclear(res);
@@ -428,7 +433,7 @@ RunIdentifySystem(PGconn *conn, char **sysid, TimeLineID *starttli,
 	}
 	if (PQntuples(res) != 1 || PQnfields(res) < 3)
 	{
-		printf("could not identify system: got %d rows and %d fields, expected %d rows and %d or more fields",
+		debug("could not identify system: got %d rows and %d fields, expected %d rows and %d or more fields",
 					 PQntuples(res), PQnfields(res), 1, 3);
 
 		PQclear(res);
@@ -448,7 +453,7 @@ RunIdentifySystem(PGconn *conn, char **sysid, TimeLineID *starttli,
 	{
 		if (sscanf(PQgetvalue(res, 0, 2), "%X/%X", &hi, &lo) != 2)
 		{
-			printf("could not parse write-ahead log location \"%s\"",
+			debug("could not parse write-ahead log location \"%s\"",
 						 PQgetvalue(res, 0, 2));
 
 			PQclear(res);
@@ -465,7 +470,7 @@ RunIdentifySystem(PGconn *conn, char **sysid, TimeLineID *starttli,
 		{
 			if (PQnfields(res) < 4)
 			{
-				printf("could not identify system: got %d rows and %d fields, expected %d rows and %d or more fields",
+				debug("could not identify system: got %d rows and %d fields, expected %d rows and %d or more fields",
 							 PQntuples(res), PQnfields(res), 1, 4);
 
 				PQclear(res);
@@ -531,7 +536,7 @@ CreateReplicationSlot(PGconn *conn, const char *slot_name, const char *plugin,
 		}
 		else
 		{
-			printf("could not send replication command \"%s\": %s",
+			debug("could not send replication command \"%s\": %s",
 						 query->data, PQerrorMessage(conn));
 
 			destroyPQExpBuffer(query);
@@ -542,7 +547,7 @@ CreateReplicationSlot(PGconn *conn, const char *slot_name, const char *plugin,
 
 	if (PQntuples(res) != 1 || PQnfields(res) != 4)
 	{
-		printf("could not create replication slot \"%s\": got %d rows and %d fields, expected %d rows and %d fields",
+		debug("could not create replication slot \"%s\": got %d rows and %d fields, expected %d rows and %d fields",
 					 slot_name,
 					 PQntuples(res), PQnfields(res), 1, 4);
 
@@ -576,7 +581,7 @@ DropReplicationSlot(PGconn *conn, const char *slot_name)
 	res = PQexec(conn, query->data);
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
 	{
-		printf("could not send replication command \"%s\": %s",
+		debug("could not send replication command \"%s\": %s",
 					 query->data, PQerrorMessage(conn));
 
 		destroyPQExpBuffer(query);
@@ -586,7 +591,7 @@ DropReplicationSlot(PGconn *conn, const char *slot_name)
 
 	if (PQntuples(res) != 0 || PQnfields(res) != 0)
 	{
-		printf("could not drop replication slot \"%s\": got %d rows and %d fields, expected %d rows and %d fields",
+		debug("could not drop replication slot \"%s\": got %d rows and %d fields, expected %d rows and %d fields",
 					 slot_name,
 					 PQntuples(res), PQnfields(res), 0, 0);
 

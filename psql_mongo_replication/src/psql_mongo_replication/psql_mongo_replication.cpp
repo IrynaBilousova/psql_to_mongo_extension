@@ -181,7 +181,7 @@ void psql_to_mongo::start_replication(const pg_recvlogical_connection_settings_t
     // settings._connection._password = NULL;
     // settings._connection._port = NULL;
     // settings._connection._username = NULL;
-
+    settings._repication._status_interval = 10;
     settings._connection = host_connection;
 
     pg_recvlogical_init(&settings, NULL);
