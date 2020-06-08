@@ -1,0 +1,14 @@
+FetchContent_GetProperties(rapidjsonExt)
+if(NOT rapidjsonExt_POPULATED)
+
+FetchContent_Declare(
+    rapidjsonExt
+    GIT_REPOSITORY https://github.com/Tencent/rapidjson.git
+    GIT_TAG master
+)
+
+FetchContent_MakeAvailable(rapidjsonExt)
+
+find_package(RapidJSON)
+
+endif()

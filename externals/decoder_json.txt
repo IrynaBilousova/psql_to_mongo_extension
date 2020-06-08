@@ -1,0 +1,12 @@
+FetchContent_GetProperties(decoder_json)
+if(NOT decoder_json_POPULATED)
+
+FetchContent_Declare(
+    decoder_json
+    GIT_REPOSITORY https://github.com/FriendOrYes/decoder_json.git
+    GIT_TAG 2022701dec64fb4603984b6b5fc8684c993a315a
+)
+
+FetchContent_MakeAvailable(decoder_json)
+
+endif()

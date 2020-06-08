@@ -1,0 +1,15 @@
+FetchContent_GetProperties(cmake_tools)
+if(NOT cmake_tools_POPULATED)
+
+FetchContent_Declare(
+    cmake_tools
+    GIT_REPOSITORY https://github.com/FriendOrYes/cmake_tools.git
+    GIT_TAG master
+)
+
+FetchContent_MakeAvailable(cmake_tools)
+
+include(${cmake_tools_SOURCE_DIR}/cmake/PGConfigReader.cmake)
+pg_config_read()
+
+endif()
