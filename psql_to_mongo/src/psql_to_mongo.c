@@ -211,7 +211,7 @@ psql_to_mongo_add_mongo_db(PG_FUNCTION_ARGS)
 
     //psql_mongo_replication_cpp_connect_mongo_db("db_name", "127.0.0.1", "27017", "a", "123", 0);
 
-    PG_RETURN_VOID();
+    PG_RETURN_INT32(mongo_last_db_id);
 }
 
 PG_FUNCTION_INFO_V1(psql_to_mongo_connect_to_mongo_db);

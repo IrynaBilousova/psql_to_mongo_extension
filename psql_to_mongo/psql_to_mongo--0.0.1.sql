@@ -11,7 +11,7 @@ CREATE FUNCTION psql_to_mongo_unsubscribe(integer) RETURNS void
 AS 'MODULE_PATHNAME'
 LANGUAGE C VOLATILE STRICT;
 
-CREATE FUNCTION psql_to_mongo_add_mongo_db(text, text, text, text, text) RETURNS void
+CREATE FUNCTION psql_to_mongo_add_mongo_db(text, text, text, text, text) RETURNS integer
 AS 'MODULE_PATHNAME'
 LANGUAGE C VOLATILE STRICT;
 
