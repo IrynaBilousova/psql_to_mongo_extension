@@ -178,6 +178,8 @@ mongo_replication::~mongo_replication()
     mongoc_uri_destroy (_uri);
     mongoc_client_destroy (_client);
     mongoc_cleanup ();
+
+    std::cout << "~mongo_replication" << std::endl;
 }
 
 void mongo_replication::insert(const std::string& collectionName, const std::string& changes)

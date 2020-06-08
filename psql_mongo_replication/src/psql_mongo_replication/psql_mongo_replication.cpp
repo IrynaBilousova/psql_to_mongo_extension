@@ -33,9 +33,6 @@ namespace
         ACTION_ID action = (ACTION_ID)a.GetInt();
         std::string collection = d["r"].GetString();
 
-        d.RemoveMember("a");
-        d.RemoveMember("r");
-
         if (action == ACTION_INSERT && d["d"].IsObject())
         {
             rapidjson::StringBuffer buffer;
@@ -180,12 +177,12 @@ void psql_to_mongo::start_replication(const pg_recvlogical_connection_settings_t
     settings._repication._plugin = NULL;
     settings._repication._slot = "custom_slot";//"custom_slot";
     settings._connection._dbname = "json_repl";
-    settings._connection._host = NULL;
-    settings._connection._password = NULL;
-    settings._connection._port = NULL;
-    settings._connection._username = NULL;
+    // settings._connection._host = NULL;
+    // settings._connection._password = NULL;
+    // settings._connection._port = NULL;
+    // settings._connection._username = NULL;
 
-    //settings._connection = host_connection;
+    settings._connection = host_connection;
 
     pg_recvlogical_init(&settings, NULL);
 
