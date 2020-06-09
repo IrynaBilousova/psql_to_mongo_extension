@@ -113,6 +113,16 @@ static int psql_to_mongo_connect_subscribers()
     return SPI_processed;
 }
 
+static void psql_to_mongo_check_if_subscription_exist_or_create()
+{
+    int ret = SPI_exec("CREATE TABLE IF NOT EXISTS psql_to_mongo_replication.subscription_info(subscriber_id integer, pubname varchar(20));", 0);
+
+    if(ret < 0)
+    {
+        elog(ERROR, "psql_to_mongo_check_if_table_exist_or_create: SPI_exec...error %s", SPI_result_code_string(ret));
+    }
+}
+
 static void init_extention()
 {
     int ret = SPI_exec("CREATE SCHEMA IF NOT EXISTS psql_to_mongo_replication;", 0);
@@ -144,6 +154,8 @@ static void init_extention()
 	    return;
     }
   
+    psql_to_mongo_check_if_subscription_exist_or_create();
+
     psql_to_mongo_connect_subscribers(); 
 } 
 
@@ -294,16 +306,6 @@ static int psql_to_mongo_is_exist_pg_publication(const char* pubname)
     return SPI_processed;
 }
 
-static void psql_to_mongo_check_if_table_exist_or_create()
-{
-    int ret = SPI_exec("CREATE TABLE IF NOT EXISTS psql_to_mongo_replication.subscription_info(subscriber_id integer, pubname varchar(20));", 0);
-
-    if(ret < 0)
-    {
-        elog(ERROR, "psql_to_mongo_check_if_table_exist_or_create: SPI_exec...error %s", SPI_result_code_string(ret));
-    }
-}
-
 static void psql_to_mongo_add_subscription(int mongo_last_db_id, const char* pubname)
 {
     char query[100]; 
@@ -332,8 +334,6 @@ psql_to_mongo_subscribe(PG_FUNCTION_ARGS)
     }
 
     SPI_connect();
-
-    psql_to_mongo_check_if_table_exist_or_create();
 
     int32 mongo_db_id = PG_GETARG_INT32(0);
 /*
