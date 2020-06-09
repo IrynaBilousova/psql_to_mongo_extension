@@ -115,7 +115,7 @@ static int psql_to_mongo_connect_subscribers()
 
 static void psql_to_mongo_check_if_subscription_exist_or_create()
 {
-    int ret = SPI_exec("CREATE TABLE IF NOT EXISTS psql_to_mongo_replication.subscription_info(subscriber_id integer, pubname varchar(20));", 0);
+    int ret = SPI_exec("CREATE TABLE IF NOT EXISTS psql_to_mongo_replication.subscription_info(subscriber_id integer PRIMARY KEY, pubname varchar(20));", 0);
 
     if(ret < 0)
     {
