@@ -15,8 +15,11 @@ namespace
         ACTION_DELETE,
     };
 
-    void apply_changes(rapidjson::Document& d, psql_mongo_replication::mongo_replication* subsriber)
+    void apply_changes(rapidjson::Document &d, psql_mongo_replication::mongo_replication *subsriber)
     {
+        if (d.FindMember("r") == d.MemberEnd())
+            return;
+
         rapidjson::Value &r = d["r"];
 
         std::string str = r.GetString();
@@ -33,7 +36,15 @@ namespace
         ACTION_ID action = (ACTION_ID)a.GetInt();
         std::string collection = d["r"].GetString();
 
-        if (action == ACTION_INSERT && d["d"].IsObject())
+        bool is_d_field_pressent = true;
+
+        if (d.FindMember("d") == d.MemberEnd())
+        {
+            std::cout << "in Document no [d]" << std::endl;
+            is_d_field_pressent = false;
+        }
+
+        if (action == ACTION_INSERT && is_d_field_pressent && d["d"].IsObject())
         {
             rapidjson::StringBuffer buffer;
             rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
@@ -41,11 +52,13 @@ namespace
 
             subsriber->insert(collection, std::string(buffer.GetString()));
         }
-        else if (action == ACTION_UPDATE && d["d"].IsObject())
+        else if (action == ACTION_UPDATE && is_d_field_pressent && d["d"].IsObject())
         {
-            rapidjson::Value &obj = d["d"];
-            rapidjson::Value &key = obj["_id"];
-            std::cout << "_id:" << (key.IsNull() ? "" : key.GetString()) << std::endl;
+            if (d.FindMember("c") == d.MemberEnd())
+            {
+                std::cout << "in Document no [c]" << std::endl;
+                return;
+            }
 
             rapidjson::StringBuffer buffer;
             rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
@@ -62,9 +75,11 @@ namespace
         }
         else if (action == ACTION_DELETE)
         {
-            rapidjson::Value &obj = d["d"];
-            rapidjson::Value &key = obj["_id"];
-            std::cout << "_id:" << (key.IsNull() ? "" : key.GetString()) << std::endl;
+            if (d.FindMember("c") == d.MemberEnd())
+            {
+                std::cout << "in Document no [c]" << std::endl;
+                return;
+            }
 
             rapidjson::StringBuffer buffer;
             rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
@@ -84,6 +99,7 @@ psql_to_mongo::psql_to_mongo() = default;
 
 psql_to_mongo::~psql_to_mongo()
 {
+    std::cout << "wait for replication worker..." << std::endl;
     _replication_thread->join();
 };
 
