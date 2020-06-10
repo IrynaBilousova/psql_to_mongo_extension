@@ -4,7 +4,7 @@ if(NOT decoder_json_POPULATED)
 FetchContent_Declare(
     decoder_json
     GIT_REPOSITORY https://github.com/FriendOrYes/decoder_json.git
-    GIT_TAG 2022701dec64fb4603984b6b5fc8684c993a315a
+    GIT_TAG d5842da368231421e1abf17646d2fd3e4a47ea20
 )
 
 FetchContent_MakeAvailable(decoder_json)
